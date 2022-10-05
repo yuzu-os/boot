@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
 use uefi::proto::console::text::Color;
+use uefi::proto::media::partition::PartitionInfo;
 use uefi::table::boot::*;
 use yuzu::runtime::*;
 
@@ -66,6 +67,21 @@ fn boot(image: Handle, mut system_table: SystemTable<Boot>) -> uefi::Result {
         }
     }
 
+    {
+        let search = SearchType::from_proto::<PartitionInfo>();
+        let result = boot_services.locate_handle_buffer(search);
+        match result {
+            Ok(handle_buffer) => {
+                let handles = handle_buffer.handles();
+
+                for handle in handles {
+                    uefi_services::println!("found partition info");
+                }
+            },
+            Err(ref err) => if err.status() != Status::NOT_FOUND { result?; }
+        }
+    }
+
     let mut buf = Vec::new();
     let mut status = Status::BUFFER_TOO_SMALL;
 
@@ -88,11 +104,13 @@ fn runtime(ctx: RuntimeContext) -> uefi::Result {
     //uefi_services::println!("Entered UEFI runtime services"); // invalid
     for fb in ctx.framebuffers {
         let (width, height) = fb.resolution;
-        for y in (0..height).step_by(4) {
+        for y in 0..height {
             for x in 0..width {
                 let index: isize = (y * width + x).try_into().unwrap();
+                let cell_size = 64;
                 unsafe {
-                    *fb.data.offset(index * 4 + 2) = 255;
+                    *fb.data.offset(index * 4 + 2) = (x / cell_size * cell_size * 255 / width) as u8;
+                    *fb.data.offset(index * 4 + 0) = (y / cell_size * cell_size * 255 / height) as u8;
                 }
             }
         }
