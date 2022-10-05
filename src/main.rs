@@ -3,18 +3,21 @@
 #![feature(abi_efiapi)]
 
 extern crate alloc;
+mod yuzu;
 
 use alloc::vec::Vec;
 use uefi::prelude::*;
+use uefi::proto::console::gop::GraphicsOutput;
 use uefi::proto::console::text::Color;
 use uefi::table::boot::*;
+use yuzu::runtime::*;
 
 #[entry]
-fn entry(handle: Handle, system_table: SystemTable<Boot>) -> Status {
-    boot(handle, system_table).status()
+fn entry(image: Handle, system_table: SystemTable<Boot>) -> Status {
+    boot(image, system_table).status()
 }
 
-fn boot(handle: Handle, mut system_table: SystemTable<Boot>) -> uefi::Result {
+fn boot(image: Handle, mut system_table: SystemTable<Boot>) -> uefi::Result {
     uefi_services::init(&mut system_table)?;
 
     let stdout = system_table.stdout();
@@ -33,27 +36,66 @@ fn boot(handle: Handle, mut system_table: SystemTable<Boot>) -> uefi::Result {
                             revision.major(), revision.minor(),
                             uefi_revision.major(), uefi_revision.minor());
 
+    let boot_services = system_table.boot_services();
+
+    let mut ctx = RuntimeContext::new();
+
+    {
+        let search = SearchType::from_proto::<GraphicsOutput>();
+        let handle_buffer = boot_services.locate_handle_buffer(search)?;
+        let handles = handle_buffer.handles();
+
+        ctx.framebuffers.reserve_exact(handles.len());
+
+        for handle in handles {
+            let params = OpenProtocolParams {
+                handle: *handle,
+                agent: image,
+                controller: None
+            };
+            let attribs = unsafe { core::mem::transmute(1) };
+            let mut gop = unsafe {
+                boot_services.open_protocol::<GraphicsOutput>(params, attribs)?
+            };
+
+            let modeinfo = gop.current_mode_info();
+            let (width, height) = modeinfo.resolution();
+            uefi_services::println!("Graphics mode: {}x{}", width, height);
+
+            ctx.framebuffers.push(Framebuffer::from_gop(&mut gop));
+        }
+    }
+
     let mut buf = Vec::new();
     let mut status = Status::BUFFER_TOO_SMALL;
 
     while status == Status::BUFFER_TOO_SMALL {
-        let boot_services = system_table.boot_services();
         let MemoryMapSize { map_size, .. } = boot_services.memory_map_size();
         buf.resize(map_size, 0);
         status = boot_services.memory_map(&mut buf).status();
     }
 
     uefi::Result::from(status)?;
-
     uefi_services::println!("Successfully retrieved UEFI memory map");
+
     uefi_services::println!("Exiting UEFI boot services");
+    system_table.exit_boot_services(image, &mut buf)?;
 
-    system_table.exit_boot_services(handle, &mut buf)?;
-
-    runtime()
+    runtime(ctx)
 }
 
-fn runtime() -> uefi::Result {
-    uefi_services::println!("Entered UEFI runtime services");
+fn runtime(ctx: RuntimeContext) -> uefi::Result {
+    //uefi_services::println!("Entered UEFI runtime services"); // invalid
+    for fb in ctx.framebuffers {
+        let (width, height) = fb.resolution;
+        for y in (0..height).step_by(4) {
+            for x in 0..width {
+                let index: isize = (y * width + x).try_into().unwrap();
+                unsafe {
+                    *fb.data.offset(index * 4 + 2) = 255;
+                }
+            }
+        }
+    }
     loop {}
 }
