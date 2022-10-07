@@ -182,11 +182,10 @@ fn runtime(ctx: RuntimeContext) -> uefi::Result {
         let (width, height) = fb.resolution;
         for y in 0..height {
             for x in 0..width {
-                let index: isize = (y * width + x).try_into().unwrap();
                 let cell_size = 64;
                 unsafe {
-                    *fb.data.offset(index * 4 + 2) = (x / cell_size * cell_size * 255 / width) as u8;
-                    *fb.data.offset(index * 4 + 0) = (y / cell_size * cell_size * 255 / height) as u8;
+                    *fb.pixel_offset(x, y).offset(2) = (x / cell_size * cell_size * 255 / width) as u8;
+                    *fb.pixel_offset(x, y).offset(0) = (y / cell_size * cell_size * 255 / height) as u8;
                 }
             }
         }
