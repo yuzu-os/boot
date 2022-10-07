@@ -6,12 +6,72 @@ extern crate alloc;
 mod yuzu;
 
 use alloc::vec::Vec;
+use uefi::Identify;
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
 use uefi::proto::console::text::Color;
-use uefi::proto::media::partition::PartitionInfo;
+use uefi::proto::device_path::*;
 use uefi::table::boot::*;
 use yuzu::runtime::*;
+
+struct DisplayDevicePathNode<'a>(&'a DevicePathNode);
+
+impl core::fmt::Display for DisplayDevicePathNode<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", match self.0.full_type() {
+            (DeviceType::HARDWARE,  DeviceSubType::HARDWARE_PCI)                  => "PCI",
+            (DeviceType::HARDWARE,  DeviceSubType::HARDWARE_PCCARD)               => "PCCard",
+            (DeviceType::HARDWARE,  DeviceSubType::HARDWARE_MEMORY_MAPPED)        => "MemoryMapped",
+            (DeviceType::HARDWARE,  DeviceSubType::HARDWARE_VENDOR)               => "(Vendor)",
+            (DeviceType::HARDWARE,  DeviceSubType::HARDWARE_CONTROLLER)           => "Controller",
+            (DeviceType::ACPI,      DeviceSubType::ACPI)                          => "ACPI",
+            (DeviceType::ACPI,      DeviceSubType::ACPI_EXPANDED)                 => "ExpandedACPI",
+            (DeviceType::ACPI,      DeviceSubType::ACPI_ADR)                      => "ADR",
+            (DeviceType::ACPI,      DeviceSubType::ACPI_NVDIMM)                   => "NVDIMM",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_ATAPI)               => "ATAPI",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_SCSI)                => "SCSI",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_FIBRE_CHANNEL)       => "FibreChannel",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_1394)                => "FireWire",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_USB)                 => "USB",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_I2O)                 => "I2O",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_INFINIBAND)          => "InfiniBand",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_VENDOR)              => "(Vendor)",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_MAC_ADDRESS)         => "MACAddress",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_IPV4)                => "IPv4",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_IPV6)                => "IPv6",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_UART)                => "UART",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_USB_CLASS)           => "USBClass",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_USB_WWID)            => "USBWWID",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_DEVICE_LOGICAL_UNIT) => "LogicalUnit",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_SATA)                => "SATA",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_ISCSI)               => "iSCSI",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_VLAN)                => "VLAN",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_FIBRE_CHANNEL_EX)    => "FibreChannelEx",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_SCSI_SAS_EX)         => "SCSISASEx",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_NVME_NAMESPACE)      => "NVMENamespace",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_URI)                 => "URI",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_UFS)                 => "UFS",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_SD)                  => "SD",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_BLUETOOTH)           => "Bluetooth",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_WIFI)                => "WiFi",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_EMMC)                => "eMMC",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_BLUETOOTH_LE)        => "BluetoothLE",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_DNS)                 => "DNS",
+            (DeviceType::MESSAGING, DeviceSubType::MESSAGING_NVDIMM_NAMESPACE)    => "NVDIMMNamespace",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_HARD_DRIVE)              => "HardDrive",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_CD_ROM)                  => "CDROM",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_VENDOR)                  => "(Vendor)",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_FILE_PATH)               => "FilePath",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_PROTOCOL)                => "MediaProtocol",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_PIWG_FIRMWARE_FILE)      => "PIWGFWFile",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_PIWG_FIRMWARE_VOLUME)    => "PIWGFWVolume",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_RELATIVE_OFFSET_RANGE)   => "RelativeOffsetRange",
+            (DeviceType::MEDIA,     DeviceSubType::MEDIA_RAM_DISK)                => "RAMDisk",
+            (DeviceType::BIOS_BOOT_SPEC, DeviceSubType::BIOS_BOOT_SPECIFICATION)  => "BIOSBootSpec",
+            _ => "Unknown"
+        })
+    }
+}
 
 #[entry]
 fn entry(image: Handle, system_table: SystemTable<Boot>) -> Status {
@@ -68,14 +128,30 @@ fn boot(image: Handle, mut system_table: SystemTable<Boot>) -> uefi::Result {
     }
 
     {
-        let search = SearchType::from_proto::<PartitionInfo>();
+        let search = SearchType::ByProtocol(&DevicePath::GUID);
         let result = boot_services.locate_handle_buffer(search);
         match result {
             Ok(handle_buffer) => {
                 let handles = handle_buffer.handles();
 
                 for handle in handles {
-                    uefi_services::println!("found partition info");
+                    let params = OpenProtocolParams {
+                        handle: *handle,
+                        agent: image,
+                        controller: None
+                    };
+                    let attribs = unsafe { core::mem::transmute(1) };
+                    let path = unsafe {
+                        boot_services.open_protocol::<DevicePath>(params, attribs)?
+                    };
+
+                    for instance in path.instance_iter() {
+                        uefi_services::print!("Device path: ");
+                        for node in instance.node_iter() {
+                            uefi_services::print!("::{}", DisplayDevicePathNode(node));
+                        }
+                        uefi_services::println!("");
+                    }
                 }
             },
             Err(ref err) => if err.status() != Status::NOT_FOUND { result?; }
