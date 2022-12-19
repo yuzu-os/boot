@@ -6,6 +6,7 @@ extern crate alloc;
 mod yuzu;
 
 use alloc::vec::Vec;
+use core::arch::asm;
 use uefi::Identify;
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
@@ -190,5 +191,11 @@ fn runtime(ctx: RuntimeContext) -> uefi::Result {
             }
         }
     }
-    loop {}
+    loop {
+        unsafe {
+            asm! {
+                "hlt"
+            }
+        }
+    }
 }
