@@ -1,1 +1,9 @@
+# output image
+uefi.img
+
+# rust target directory
 /target
+
+# vim swap files
+.*.swp
+.*.swo
