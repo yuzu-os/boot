@@ -1,11 +1,17 @@
 IMAGE=uefi.img
 SECTORS=262144
 SECTOR_SIZE=512
+RELEASE?=0
 
 QEMU_SYSTEM_X64=qemu-system-x86_64
 BIOS=/usr/share/edk2/ovmf/OVMF_CODE.fd
 
+ifeq ($(RELEASE),1)
+TARGET_IMAGE:=target/x86_64-unknown-uefi/release/boot.efi
+else
 TARGET_IMAGE:=target/x86_64-unknown-uefi/debug/boot.efi
+endif
+
 PART_IMAGE:=$(shell mktemp)
 PART_SECTORS:=$(shell expr $(SECTORS) - 2047)
 
@@ -22,7 +28,11 @@ clean:
 
 .PHONY: cargo
 cargo:
+ifeq ($(RELEASE),1)
+	cargo build --release
+else
 	cargo build
+endif
 
 .PHONY: part
 part: cargo
